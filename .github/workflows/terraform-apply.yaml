@@ -38,6 +38,10 @@ env:
   # MinIO backend credentials
   AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+  # factory.talos.dev returns 403 for the range request the bpg/proxmox provider
+  # makes to fetch file metadata. Use the GitHub releases ISO instead (identical
+  # for the default schematic). Update this when bumping talos_version.
+  TF_VAR_talos_iso_url: "https://github.com/siderolabs/talos/releases/download/v1.9.2/nocloud-amd64.iso"
 
 jobs:
   apply:
