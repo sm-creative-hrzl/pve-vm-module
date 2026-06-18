@@ -6,6 +6,13 @@ name: terraform-plan
 # runner with network reachability. Swap `runs-on` accordingly.
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**.tf"
+      - "**.tftpl"
+      - "manifests/**"
+      - ".github/workflows/**"
   workflow_dispatch:
     inputs:
       var_file:
