@@ -1,0 +1,93 @@
+name: terraform-destroy
+
+# Triggered automatically when terraform-apply completes successfully, or
+# manually via workflow_dispatch. Always requires environment approval and the
+# DESTROY_VM organisation variable — it can never run by accident.
+
+on:
+  workflow_run:
+    workflows: ["terraform-apply"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'true' to confirm you want to DESTROY the VM"
+        required: true
+        default: "false"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+# Credentials are sourced from organisation-level variables and secrets
+# (sm-creative-hrzl organisation). No environment-level override is needed.
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VERSION: ${{ vars.TF_VERSION }}
+  TF_VAR_pve_api_url: ${{ vars.PVE_API_URL }}
+  TF_VAR_pve_token_id: ${{ vars.PVE_TOKEN_ID }}
+  TF_VAR_pve_token_secret: ${{ secrets.PVE_TOKEN_SECRET }}
+  # MinIO backend credentials
+  AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+
+jobs:
+  destroy:
+    # workflow_run: only queue when apply actually succeeded.
+    # workflow_dispatch: require explicit confirmation input.
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && inputs.confirm == 'true')
+    runs-on: [self-hosted]
+    # Pauses here and waits for a reviewer to approve before any step runs.
+    # Configure required reviewers at: Settings → Environments → destroy-approval
+    environment: destroy-approval
+    steps:
+      - name: Verify guards
+        run: |
+          if [[ "${{ vars.DESTROY_VM }}" != "true" ]]; then
+            echo "Organisation variable DESTROY_VM must be set to 'true' to allow destroy." >&2
+            exit 1
+          fi
+          echo "Guards passed. Proceeding with destroy."
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # When triggered by workflow_run, check out the same ref that ran apply.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Install Terraform
+        run: |
+          TF_ZIP="terraform_${TF_VERSION}_linux_amd64.zip"
+          curl -fsSL -o "/tmp/${TF_ZIP}" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/${TF_ZIP}"
+          mkdir -p "${HOME}/.local/bin"
+          python3 -c "
+          import zipfile, sys
+          zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])
+          " "/tmp/${TF_ZIP}" "${HOME}/.local/bin"
+          chmod +x "${HOME}/.local/bin/terraform"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check backend credentials
+        run: |
+          if [[ -z "${AWS_ACCESS_KEY_ID}" || -z "${AWS_SECRET_ACCESS_KEY}" ]]; then
+            echo "Missing MinIO backend credentials. Configure MINIO_ACCESS_KEY and MINIO_SECRET_KEY as organisation variables/secrets." >&2
+            exit 1
+          fi
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        run: terraform validate -no-color
+
+      - name: Terraform destroy
+        run: |
+          EXTRA_ARGS=""
+          if [[ -f "input.tfvars" ]]; then
+            EXTRA_ARGS="-var-file=input.tfvars"
+          fi
+          terraform destroy -input=false -auto-approve -no-color ${EXTRA_ARGS}
