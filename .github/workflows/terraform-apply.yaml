@@ -1,0 +1,70 @@
+name: terraform-apply
+
+# Manual-only. Run this workflow whenever you want to apply changes.
+#
+# NOTE: This must run on a runner that can reach the Proxmox API —
+# almost always a self-hosted runner in the homelab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      var_file:
+        description: "Var file to pass to terraform apply (e.g. input.tfvars)"
+        required: false
+        default: "input.tfvars"
+        type: string
+
+# Prevent overlapping applies from racing on the same state.
+concurrency:
+  group: terraform-apply
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Credentials are sourced from organisation-level variables and secrets
+# (sm-creative-hrzl organisation). No environment-level override is needed.
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VERSION: ${{ vars.TF_VERSION }}
+  TF_VAR_pve_api_url: ${{ vars.PVE_API_URL }}
+  TF_VAR_pve_token_id: ${{ vars.PVE_TOKEN_ID }}
+  TF_VAR_pve_token_secret: ${{ secrets.PVE_TOKEN_SECRET }}
+  # MinIO backend credentials
+  AWS_ACCESS_KEY_ID: ${{ vars.MINIO_ACCESS_KEY }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+
+jobs:
+  apply:
+    runs-on: [self-hosted]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Terraform
+        run: |
+          curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
+          python3 -c "import zipfile; zipfile.ZipFile('/tmp/terraform.zip').extractall('/tmp/tf-bin')"
+          mkdir -p "$HOME/.local/bin"
+          mv /tmp/tf-bin/terraform "$HOME/.local/bin/terraform"
+          chmod +x "$HOME/.local/bin/terraform"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          rm -rf /tmp/terraform.zip /tmp/tf-bin
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        run: terraform validate -no-color
+
+      - name: Terraform apply
+        run: |
+          VAR_FILE="${{ inputs.var_file }}"
+          if [[ -z "${VAR_FILE}" ]]; then
+            VAR_FILE="input.tfvars"
+          fi
+          EXTRA_ARGS=""
+          if [[ -f "${VAR_FILE}" ]]; then
+            EXTRA_ARGS="-var-file=${VAR_FILE}"
+          fi
+          terraform apply -input=false -auto-approve -no-color ${EXTRA_ARGS}
