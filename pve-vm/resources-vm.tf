@@ -1,4 +1,4 @@
-resource "proxmox_virtual_environment_download_file" "talos_iso" {
+resource "proxmox_download_file" "talos_iso" {
   content_type = "iso"
   datastore_id = var.iso_datastore_id
   node_name    = var.pve_node
@@ -29,7 +29,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
 
   cdrom {
-    file_id   = proxmox_virtual_environment_download_file.talos_iso.id
+    file_id   = proxmox_download_file.talos_iso.id
     interface = "ide3"
   }
 
