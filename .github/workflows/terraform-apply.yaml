@@ -1,19 +1,13 @@
-name: terraform-apply
+name: terraform-deploy
 
-# Runs automatically when terraform-plan completes successfully on any branch,
-# or manually via workflow_dispatch.
-#
-# NOTE: This must run on a runner that can reach the Proxmox API —
-# almost always a self-hosted runner in the homelab.
+# Manual deployment workflow: plan → manual approval → apply.
+# Trigger this instead of relying on the plan workflow to chain into apply.
 
 on:
-  workflow_run:
-    workflows: ["terraform-plan"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       var_file:
-        description: "Var file to pass to terraform apply (e.g. input.tfvars)"
+        description: "Var file to pass to terraform (e.g. input.tfvars)"
         required: false
         default: "input.tfvars"
         type: string
@@ -27,8 +21,6 @@ permissions:
   contents: read
   actions: read
 
-# Credentials are sourced from organisation-level variables and secrets
-# (sm-creative-hrzl organisation). No environment-level override is needed.
 env:
   TF_IN_AUTOMATION: "true"
   TF_VERSION: ${{ vars.TF_VERSION }}
@@ -40,22 +32,11 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
 
 jobs:
-  apply:
-    # For workflow_run: only proceed when the plan actually succeeded.
-    # For workflow_dispatch: always allow manual runs.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+  plan:
     runs-on: [self-hosted]
-    # Pauses here and waits for a reviewer to approve before any step runs.
-    # Configure required reviewers at: Settings → Environments → apply-approval
-    environment: apply-approval
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # When triggered by workflow_run, check out the same ref that ran the plan.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install Terraform
         run: |
@@ -81,11 +62,10 @@ jobs:
         run: terraform init -input=false
 
       - name: Terraform validate
-        run: terraform validate -no-color
+        run: terraform validate
 
-      - name: Terraform apply
+      - name: Terraform plan
         run: |
-          # inputs.var_file is only set for workflow_dispatch; falls back to input.tfvars otherwise.
           VAR_FILE="${{ inputs.var_file }}"
           if [[ -z "${VAR_FILE}" ]]; then
             VAR_FILE="input.tfvars"
@@ -94,4 +74,54 @@ jobs:
           if [[ -f "${VAR_FILE}" ]]; then
             EXTRA_ARGS="-var-file=${VAR_FILE}"
           fi
-          terraform apply -input=false -auto-approve -no-color ${EXTRA_ARGS}
+          terraform plan -input=false -out=tfplan ${EXTRA_ARGS}
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: tfplan
+          retention-days: 1
+
+  apply:
+    needs: plan
+    runs-on: [self-hosted]
+    # Pauses here and waits for a reviewer to approve before any step runs.
+    # Configure required reviewers at: Settings → Environments → apply-approval
+    environment: apply-approval
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Terraform
+        run: |
+          TF_ZIP="terraform_${TF_VERSION}_linux_amd64.zip"
+          curl -fsSL -o "/tmp/${TF_ZIP}" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/${TF_ZIP}"
+          mkdir -p "${HOME}/.local/bin"
+          python3 -c "
+          import zipfile, sys
+          zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])
+          " "/tmp/${TF_ZIP}" "${HOME}/.local/bin"
+          chmod +x "${HOME}/.local/bin/terraform"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check backend credentials
+        run: |
+          if [[ -z "${AWS_ACCESS_KEY_ID}" || -z "${AWS_SECRET_ACCESS_KEY}" ]]; then
+            echo "Missing MinIO backend credentials. Configure MINIO_ACCESS_KEY and MINIO_SECRET_KEY as organisation variables/secrets." >&2
+            exit 1
+          fi
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: tfplan-${{ github.run_id }}
+
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve tfplan
