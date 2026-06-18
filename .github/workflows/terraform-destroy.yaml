@@ -50,16 +50,34 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
-          python3 -c "import zipfile; zipfile.ZipFile('/tmp/terraform.zip').extractall('/tmp/tf-bin')"
-          mkdir -p "$HOME/.local/bin"
-          mv /tmp/tf-bin/terraform "$HOME/.local/bin/terraform"
-          chmod +x "$HOME/.local/bin/terraform"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          rm -rf /tmp/terraform.zip /tmp/tf-bin
+          TF_ZIP="terraform_${TF_VERSION}_linux_amd64.zip"
+          curl -fsSL -o "/tmp/${TF_ZIP}" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/${TF_ZIP}"
+          mkdir -p "${HOME}/.local/bin"
+          python3 -c "
+          import zipfile, sys
+          zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])
+          " "/tmp/${TF_ZIP}" "${HOME}/.local/bin"
+          chmod +x "${HOME}/.local/bin/terraform"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check backend credentials
+        run: |
+          if [[ -z "${AWS_ACCESS_KEY_ID}" || -z "${AWS_SECRET_ACCESS_KEY}" ]]; then
+            echo "Missing MinIO backend credentials. Configure MINIO_ACCESS_KEY and MINIO_SECRET_KEY as organisation variables/secrets." >&2
+            exit 1
+          fi
 
       - name: Terraform init
         run: terraform init -input=false
 
+      - name: Terraform validate
+        run: terraform validate -no-color
+
       - name: Terraform destroy
-        run: terraform destroy -input=false -auto-approve -no-color -var-file=input.tfvars
+        run: |
+          EXTRA_ARGS=""
+          if [[ -f "input.tfvars" ]]; then
+            EXTRA_ARGS="-var-file=input.tfvars"
+          fi
+          terraform destroy -input=false -auto-approve -no-color ${EXTRA_ARGS}
