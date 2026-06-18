@@ -53,7 +53,7 @@ jobs:
           echo "Guards passed. Proceeding with destroy."
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # When triggered by workflow_run, check out the same ref that ran apply.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
