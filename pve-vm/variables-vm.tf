@@ -25,9 +25,10 @@ variable "tags" {
   default     = []
 }
 
-variable "iso_file_id" {
-  description = "Proxmox file ID of the Talos ISO (e.g. local:iso/talos-v1.9.2-nocloud-amd64.iso)."
+variable "iso_datastore_id" {
+  description = "Proxmox datastore for the downloaded Talos ISO. Must support 'iso' content (e.g. local)."
   type        = string
+  default     = "local"
 }
 
 variable "cpu" {

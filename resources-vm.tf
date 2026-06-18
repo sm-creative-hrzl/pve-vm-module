@@ -35,7 +35,7 @@ module "talos_vm" {
   description = var.vm_description
   tags        = var.tags
 
-  iso_file_id = proxmox_virtual_environment_download_file.talos_iso.id
+  iso_datastore_id = var.iso_datastore_id
 
   cpu       = var.cpu
   memory    = var.memory

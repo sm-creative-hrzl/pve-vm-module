@@ -10,7 +10,7 @@ resource "proxmox_virtual_environment_download_file" "talos_iso" {
   overwrite = false
 }
 
-resource "proxmox_virtual_environment_vm" "talos-vm" {
+resource "proxmox_virtual_environment_vm" "this" {
   name        = var.name
   vm_id       = var.vmid
   node_name   = var.pve_node
@@ -29,7 +29,7 @@ resource "proxmox_virtual_environment_vm" "talos-vm" {
   }
 
   cdrom {
-    file_id   = var.iso_file_id
+    file_id   = proxmox_virtual_environment_download_file.talos_iso.id
     interface = "ide3"
   }
 
