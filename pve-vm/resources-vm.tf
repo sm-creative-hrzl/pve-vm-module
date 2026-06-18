@@ -1,15 +1,3 @@
-resource "proxmox_download_file" "talos_iso" {
-  content_type = "iso"
-  datastore_id = var.iso_datastore_id
-  node_name    = var.pve_node
-
-  url       = local.talos_iso_url
-  file_name = "talos-${var.talos_version}-nocloud-amd64.iso"
-
-  # Avoid re-downloading on every apply once the image is present.
-  overwrite = false
-}
-
 resource "proxmox_virtual_environment_vm" "this" {
   name        = var.name
   vm_id       = var.vmid
@@ -29,7 +17,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
 
   cdrom {
-    file_id   = proxmox_download_file.talos_iso.id
+    file_id   = "${var.iso_datastore_id}:iso/talos-${var.talos_version}-nocloud-amd64.iso"
     interface = "ide3"
   }
 
