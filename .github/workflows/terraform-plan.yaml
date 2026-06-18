@@ -42,7 +42,7 @@ jobs:
     runs-on: [self-hosted]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Terraform
         run: |
@@ -71,7 +71,7 @@ jobs:
         run: terraform init -input=false
 
       - name: Terraform validate
-        run: terraform validate -no-color
+        run: terraform validate
 
       - name: Terraform plan
         run: |
@@ -85,11 +85,11 @@ jobs:
           if [[ -f "${VAR_FILE}" ]]; then
             EXTRA_ARGS="-var-file=${VAR_FILE}"
           fi
-          terraform plan -input=false -no-color -out=tfplan ${EXTRA_ARGS}
+          terraform plan -input=false -out=tfplan ${EXTRA_ARGS}
         continue-on-error: false
 
       - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Use run_id, not ref_name: PR refs ("1/merge") and slashed branch
           # names ("feature/foo") contain "/", which artifact names forbid.

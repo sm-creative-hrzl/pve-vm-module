@@ -1,27 +1,26 @@
 name: terraform-destroy
 
-# Triggered automatically when terraform-apply completes successfully, or
-# manually via workflow_dispatch. Always requires environment approval and the
-# DESTROY_VM organisation variable — it can never run by accident.
+# Manual destroy workflow: plan -destroy → manual approval → destroy.
+# Requires the DESTROY_VM organisation variable set to 'true' as an extra guard.
 
 on:
-  workflow_run:
-    workflows: ["terraform-apply"]
-    types: [completed]
   workflow_dispatch:
     inputs:
-      confirm:
-        description: "Type 'true' to confirm you want to DESTROY the VM"
-        required: true
-        default: "false"
+      var_file:
+        description: "Var file to pass to terraform (e.g. input.tfvars)"
+        required: false
+        default: "input.tfvars"
         type: string
+
+# Prevent overlapping destroys from racing on the same state.
+concurrency:
+  group: terraform-apply
+  cancel-in-progress: false
 
 permissions:
   contents: read
   actions: read
 
-# Credentials are sourced from organisation-level variables and secrets
-# (sm-creative-hrzl organisation). No environment-level override is needed.
 env:
   TF_IN_AUTOMATION: "true"
   TF_VERSION: ${{ vars.TF_VERSION }}
@@ -33,30 +32,19 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
 
 jobs:
-  destroy:
-    # workflow_run: only queue when apply actually succeeded.
-    # workflow_dispatch: require explicit confirmation input.
-    if: >-
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      (github.event_name == 'workflow_dispatch' && inputs.confirm == 'true')
+  plan:
     runs-on: [self-hosted]
-    # Pauses here and waits for a reviewer to approve before any step runs.
-    # Configure required reviewers at: Settings → Environments → destroy-approval
-    environment: destroy-approval
     steps:
-      - name: Verify guards
+      - name: Verify destroy guard
         run: |
           if [[ "${{ vars.DESTROY_VM }}" != "true" ]]; then
             echo "Organisation variable DESTROY_VM must be set to 'true' to allow destroy." >&2
             exit 1
           fi
-          echo "Guards passed. Proceeding with destroy."
+          echo "Guard passed. Proceeding with destroy plan."
 
       - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          # When triggered by workflow_run, check out the same ref that ran apply.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+        uses: actions/checkout@v7
 
       - name: Install Terraform
         run: |
@@ -82,12 +70,66 @@ jobs:
         run: terraform init -input=false
 
       - name: Terraform validate
-        run: terraform validate -no-color
+        run: terraform validate
+
+      - name: Terraform plan (destroy)
+        run: |
+          VAR_FILE="${{ inputs.var_file }}"
+          if [[ -z "${VAR_FILE}" ]]; then
+            VAR_FILE="input.tfvars"
+          fi
+          EXTRA_ARGS=""
+          if [[ -f "${VAR_FILE}" ]]; then
+            EXTRA_ARGS="-var-file=${VAR_FILE}"
+          fi
+          terraform plan -destroy -input=false -out=tfplan ${EXTRA_ARGS}
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tfplan-destroy-${{ github.run_id }}
+          path: tfplan
+          retention-days: 1
+
+  destroy:
+    needs: plan
+    runs-on: [self-hosted]
+    # Pauses here and waits for a reviewer to approve before any step runs.
+    # Configure required reviewers at: Settings → Environments → destroy-approval
+    environment: destroy-approval
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Terraform
+        run: |
+          TF_ZIP="terraform_${TF_VERSION}_linux_amd64.zip"
+          curl -fsSL -o "/tmp/${TF_ZIP}" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/${TF_ZIP}"
+          mkdir -p "${HOME}/.local/bin"
+          python3 -c "
+          import zipfile, sys
+          zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])
+          " "/tmp/${TF_ZIP}" "${HOME}/.local/bin"
+          chmod +x "${HOME}/.local/bin/terraform"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check backend credentials
+        run: |
+          if [[ -z "${AWS_ACCESS_KEY_ID}" || -z "${AWS_SECRET_ACCESS_KEY}" ]]; then
+            echo "Missing MinIO backend credentials. Configure MINIO_ACCESS_KEY and MINIO_SECRET_KEY as organisation variables/secrets." >&2
+            exit 1
+          fi
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: tfplan-destroy-${{ github.run_id }}
 
       - name: Terraform destroy
-        run: |
-          EXTRA_ARGS=""
-          if [[ -f "input.tfvars" ]]; then
-            EXTRA_ARGS="-var-file=input.tfvars"
-          fi
-          terraform destroy -input=false -auto-approve -no-color ${EXTRA_ARGS}
+        run: terraform apply -input=false -auto-approve tfplan
