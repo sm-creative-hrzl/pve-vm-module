@@ -7,9 +7,10 @@ resource "proxmox_virtual_environment_vm" "this" {
 
   on_boot = true
 
+  scsi_hardware = "virtio-scsi-single"
+
   agent {
-    enabled = true
-    trim    = true
+    enabled = false
   }
 
   operating_system {
