@@ -1,9 +1,13 @@
 name: terraform-destroy
 
-# Manual-only. Destroys the VM. Guarded by an explicit confirmation input and
-# an organisation variable so it can never run by accident.
+# Triggered automatically when terraform-apply completes successfully, or
+# manually via workflow_dispatch. Always requires environment approval and the
+# DESTROY_VM organisation variable — it can never run by accident.
 
 on:
+  workflow_run:
+    workflows: ["terraform-apply"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       confirm:
@@ -14,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # Credentials are sourced from organisation-level variables and secrets
 # (sm-creative-hrzl organisation). No environment-level override is needed.
@@ -29,24 +34,29 @@ env:
 
 jobs:
   destroy:
-    # Gate the entire job on the confirmation input.
-    if: ${{ inputs.confirm == 'true' }}
+    # workflow_run: only queue when apply actually succeeded.
+    # workflow_dispatch: require explicit confirmation input.
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && inputs.confirm == 'true')
     runs-on: [self-hosted]
+    # Pauses here and waits for a reviewer to approve before any step runs.
+    # Configure required reviewers at: Settings → Environments → destroy-approval
+    environment: destroy-approval
     steps:
-      - name: Verify confirmation
+      - name: Verify guards
         run: |
-          if [[ "${{ inputs.confirm }}" != "true" ]]; then
-            echo "Confirmation not provided (expected 'true'). Aborting." >&2
-            exit 1
-          fi
           if [[ "${{ vars.DESTROY_VM }}" != "true" ]]; then
             echo "Organisation variable DESTROY_VM must be set to 'true' to allow destroy." >&2
             exit 1
           fi
-          echo "Confirmation accepted. Proceeding with destroy."
+          echo "Guards passed. Proceeding with destroy."
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # When triggered by workflow_run, check out the same ref that ran apply.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install Terraform
         run: |

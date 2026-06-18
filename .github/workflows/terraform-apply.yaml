@@ -1,11 +1,15 @@
 name: terraform-apply
 
-# Manual-only. Run this workflow whenever you want to apply changes.
+# Runs automatically when terraform-plan completes successfully on any branch,
+# or manually via workflow_dispatch.
 #
 # NOTE: This must run on a runner that can reach the Proxmox API —
 # almost always a self-hosted runner in the homelab.
 
 on:
+  workflow_run:
+    workflows: ["terraform-plan"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       var_file:
@@ -21,6 +25,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 # Credentials are sourced from organisation-level variables and secrets
 # (sm-creative-hrzl organisation). No environment-level override is needed.
@@ -36,10 +41,21 @@ env:
 
 jobs:
   apply:
+    # For workflow_run: only proceed when the plan actually succeeded.
+    # For workflow_dispatch: always allow manual runs.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: [self-hosted]
+    # Pauses here and waits for a reviewer to approve before any step runs.
+    # Configure required reviewers at: Settings → Environments → apply-approval
+    environment: apply-approval
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # When triggered by workflow_run, check out the same ref that ran the plan.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install Terraform
         run: |
@@ -69,6 +85,7 @@ jobs:
 
       - name: Terraform apply
         run: |
+          # inputs.var_file is only set for workflow_dispatch; falls back to input.tfvars otherwise.
           VAR_FILE="${{ inputs.var_file }}"
           if [[ -z "${VAR_FILE}" ]]; then
             VAR_FILE="input.tfvars"
