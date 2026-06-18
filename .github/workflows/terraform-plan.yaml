@@ -45,14 +45,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Terraform
-        run: |
-          curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
-          python3 -c "import zipfile; zipfile.ZipFile('/tmp/terraform.zip').extractall('/tmp/tf-bin')"
-          mkdir -p "$HOME/.local/bin"
-          mv /tmp/tf-bin/terraform "$HOME/.local/bin/terraform"
-          chmod +x "$HOME/.local/bin/terraform"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          rm -rf /tmp/terraform.zip /tmp/tf-bin
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform fmt
         run: terraform fmt -recursive -check -diff
